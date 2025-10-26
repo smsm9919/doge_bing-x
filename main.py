@@ -1,19 +1,17 @@
 # -*- coding: utf-8 -*-
 """
 BYBIT — SOL Perp Bot (RF-CLOSED + Council • One-Shot Strict Close)
-• No ENV — all params are defined in-code.
-• Exchange: Bybit USDT Perps via CCXT
-• Symbol: SOL/USDT:USDT
+• ENV فقط للمفاتيح والـ URL والبورت:
+  - BYBIT_API_KEY, BYBIT_API_SECRET, SELF_URL (أو RENDER_EXTERNAL_URL), PORT
+• باقي الإعدادات كلها من الكود.
 • Entry: Range Filter (CLOSED candle only) + Council confirm
-• Management (after entry only):
-    - Trend riding (ADX/DI confirms) with ATR trail as safety-net
-    - ONE-SHOT strict close at: Apex rejection OR Long-wick+decent PnL OR Confirmed opposite RF
-• Strict close (reduceOnly) + wait-for-next-same-side after any close
-• Guards: ADX>=17 entry gate, spread guard, cooldown, rate-limit
+• One-shot: ركوب الترند + إغلاق صارم (Apex/Long-wick+PnL/Opposite RF)
+• After close: انتظر نفس جهة RF المُغلقة قبل أي دخول جديد
+• Guards: ADX≥17 للدخول، spread، cooldown، rate-limit
 • Flask /metrics /health + rotating logs
 """
 
-import time, math, random, signal, sys, traceback, logging
+import os, time, math, random, signal, sys, traceback, logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from collections import deque
@@ -28,7 +26,13 @@ try:
 except Exception:
     def colored(t,*a,**k): return t
 
-# =================== FIXED SETTINGS (NO ENV) ===================
+# ============== ENV (المطلوب فقط) ==============
+API_KEY  = os.getenv("BYBIT_API_KEY", "")
+API_SEC  = os.getenv("BYBIT_API_SECRET", "")
+SELF_URL = (os.getenv("SELF_URL", "") or os.getenv("RENDER_EXTERNAL_URL", "")).strip()
+PORT     = int(os.getenv("PORT", "5000"))
+
+# =================== FIXED SETTINGS (NO ENV for the rest) ===================
 # Market / timeframe
 SYMBOL        = "SOL/USDT:USDT"
 INTERVAL      = "15m"
@@ -60,7 +64,7 @@ WICK_TAKE_MIN_PCT = 0.40  # إذا الربح ≥ هذا الحد وظهرت ف�
 WICK_RATIO_TH     = 0.60  # نسبة الفتيلة من مدى الشمعة لتعتبر "طويلة"
 OPP_RF_VOTES_NEEDED = 2
 OPP_RF_MIN_ADX    = 22.0
-OPP_RF_MIN_HYST   = 8.0   # px vs filter bps
+OPP_RF_MIN_HYST   = 8.0   # px vs filter in bps
 
 # Trend ride safety net
 TRAIL_ACTIVATE_PCT = 1.20
@@ -78,10 +82,6 @@ NEAR_CLOSE_S   = 1
 COOLDOWN_SEC   = 90
 MAX_TRADES_PER_HOUR = 6
 
-# Optional keepalive (disabled by default)
-SELF_URL = ""  # set if deployed behind HTTP pinger
-PORT     = 5000
-
 # =================== LOGGING ===================
 def setup_file_logging():
     logger = logging.getLogger()
@@ -98,17 +98,16 @@ setup_file_logging()
 
 # =================== EXCHANGE (Bybit) ===================
 def make_ex():
-    # أدخل مفاتيحك هنا يدويًا لو هتشغل لايف
     return ccxt.bybit({
-        "apiKey": "",
-        "secret": "",
+        "apiKey": API_KEY,
+        "secret": API_SEC,
         "enableRateLimit": True,
         "timeout": 20000,
         "options": {"defaultType": "swap"}
     })
 
 ex = make_ex()
-MODE_LIVE = bool(ex.apiKey and ex.secret)
+MODE_LIVE = bool(API_KEY and API_SEC)
 MARKET = {}
 AMT_PREC = 0
 LOT_STEP = None
@@ -482,7 +481,7 @@ def _reset_after_close(reason, prev_side=None):
         "pnl": 0.0, "bars": 0, "trail": None,
         "highest_profit_pct": 0.0, "opp_votes": 0
     })
-    # طلبك: انتظار نفس الجهة بعد الإغلاق (sell→انتظار sell، buy→انتظار buy)
+    # انتظار نفس الجهة بعد الإغلاق (sell→انتظار sell، buy→انتظار buy)
     if prev_side == "long":  wait_for_next_signal_side = "buy"
     elif prev_side == "short": wait_for_next_signal_side = "sell"
     else: wait_for_next_signal_side = None
@@ -752,7 +751,7 @@ def health():
     }), 200
 
 def keepalive_loop():
-    url=(SELF_URL or "").strip().rstrip("/")
+    url=SELF_URL.strip().rstrip("/")
     if not url:
         print(colored("⛔ keepalive disabled (SELF_URL not set)", "yellow"))
         return
