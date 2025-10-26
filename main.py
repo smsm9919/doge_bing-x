@@ -7,7 +7,7 @@ RF (closed candle) + Smart Council SCM (Boxes + Liquidity + Sweeps + Displacemen
 • Debounce لإشارات RF المعاكسة داخل الترند.
 • Wick-harvest مؤجل في الترند القوي.
 • خروج صارم عند نهاية موجة الترند بعد تأكيد SCM.
-• Logs سطر واحد يشرح: «SCM | trend | boxes | liquidity | displacement | retest | trap | votes».
+• Logs سطر واحد: «SCM | trend | boxes | liquidity | displacement | retest | trap | votes».
 """
 
 import os, time, math, random, signal, sys, traceback, logging
@@ -66,24 +66,22 @@ BREAK_ADX_MIN      = 22.0
 BREAK_DI_MARGIN    = 5.0
 BREAK_BODY_ATR_MIN = 0.60
 
-LIQ_EQ_LOOKBACK    = 30     # البحث عن قمم/قيعان متساوية
-LIQ_EQ_TOL_BPS     = 6.0    # هامش المساواة
-SWEEP_WICK_RATIO   = 0.55   # فتيلة sweep
-DISP_BODY_ATR_MIN  = 0.75   # شمعة دفع (Displacement)
-RETEST_MAX_BARS    = 6      # إعادة اختبار خلال X شموع (مُصلَحة الاسم)
-
-# فِخ Trap
-TRAP_CLOSE_BACK_BPS= 8.0    # إغلاق رجوع داخل الصندوق بعد كسره
+LIQ_EQ_LOOKBACK    = 30
+LIQ_EQ_TOL_BPS     = 6.0
+SWEEP_WICK_RATIO   = 0.55
+DISP_BODY_ATR_MIN  = 0.75
+RETEST_MAX_BARS    = 6
+TRAP_CLOSE_BACK_BPS= 8.0
 
 # ترند قوي / Debounce RF
 TREND_STRONG_ADX   = 28.0
 TREND_STRONG_DI_M  = 8.0
-OPP_RF_DEBOUNCE    = 2      # عدد الشموع المغلقة المطلوبة لتأكيد RF معاكس داخل الترند
+OPP_RF_DEBOUNCE    = 2
 
 # إدارة الصفقة
 TRAIL_ACTIVATE_PCT = 1.20
 ATR_TRAIL_MULT     = 1.6
-WICK_TAKE_MIN_PCT  = 0.40   # يُؤجّل لو الترند قوي
+WICK_TAKE_MIN_PCT  = 0.40
 
 # خروج نهاية موجة (SCM Exhaustion)
 EXH_MIN_PNL_PCT   = 0.35
@@ -170,20 +168,16 @@ STATE = {
     "open": False, "side": None, "entry": None, "qty": 0.0,
     "pnl": 0.0, "bars": 0, "trail": None,
     "hp_pct": 0.0, "strength": 0.0,
-    # تتبع الترند:
     "peak_adx": 0.0, "rsi_peak": 50.0, "rsi_trough": 50.0,
     "peak_price": 0.0, "trough_price": 0.0,
-    # Debounce RF:
     "opp_rf_count": 0,
-    # سطر لوج SCM الأخير:
     "scm_line": ""
 }
 
 def _norm_sym(s: str) -> str:
     return (s or "").replace("/", "").replace(":", "").upper()
 def _sym_match(a: str, b: str) -> bool:
-    A, B = _norm_sym(a), _norm_sym(b)
-    return A == B or A in B or B in A
+    A, B = _norm_sym(a), _norm_sym(b); return A == B or A in B or B in A
 
 def _round_amt(q):
     if q is None: return 0.0
@@ -358,7 +352,6 @@ def _near_bps(px, lvl, bps):
     except Exception: return False
 
 def find_equal_highs_lows(df: pd.DataFrame):
-    """EQH/EQL: قمم/قيعان متساوية تقريبيًا خلال LIQ_EQ_LOOKBACK."""
     if len(df) < LIQ_EQ_LOOKBACK+2: return None, None
     d = df.iloc[-(LIQ_EQ_LOOKBACK+1):-1]
     highs = d["high"].astype(float).values
@@ -372,7 +365,6 @@ def find_equal_highs_lows(df: pd.DataFrame):
     return (eh if eqh_ok else None), (el if eql_ok else None)
 
 def detect_sweep(df: pd.DataFrame, eqh, eql):
-    """سويب سيولة: فتيلة كسرت EQH/EQL ثم إغلاق عكسها."""
     if len(df) < 2: return {"sweep_up":False,"sweep_down":False}
     o=float(df["open"].iloc[-1]); h=float(df["high"].iloc[-1])
     l=float(df["low"].iloc[-1]);  c=float(df["close"].iloc[-1])
@@ -386,11 +378,9 @@ def detect_sweep(df: pd.DataFrame, eqh, eql):
 
 # =================== SCM Signals ===================
 def displacement_bar(df: pd.DataFrame, ind: dict, side: str) -> bool:
-    """شمعة دفع قوية مع الاتجاه."""
     if len(df) < 1: return False
     o=float(df["open"].iloc[-1]); c=float(df["close"].iloc[-1])
-    atr=float(ind.get("atr") or 0.0)
-    body=abs(c-o)
+    atr=float(ind.get("atr") or 0.0); body=abs(c-o)
     if atr<=0: return False
     if side=="buy":  return (c>o) and (body >= DISP_BODY_ATR_MIN*atr)
     else:            return (c<o) and (body >= DISP_BODY_ATR_MIN*atr)
@@ -403,21 +393,17 @@ def retest_happened(history_df: pd.DataFrame, zones: dict, side: str) -> bool:
         d = history_df.iloc[-(RETEST_MAX_BARS+1):-1]
         sup, dem = zones.get("supply"), zones.get("demand")
         closes = d["close"].astype(float).values
-
         if side == "buy" and sup:
             mid = (sup["top"] + sup["bot"]) / 2.0
             return any((px >= sup["bot"] and px <= sup["top"]) or (px >= mid) for px in closes)
-
         if side == "sell" and dem:
             mid = (dem["top"] + dem["bot"]) / 2.0
             return any((px <= dem["top"] and px >= dem["bot"]) or (px <= mid) for px in closes)
-
         return False
     except Exception:
         return False
 
 def trap_detect(df: pd.DataFrame, zones: dict, side: str) -> bool:
-    """Trap: كسر وهمي وإغلاق رجوع داخل الصندوق بالهستريسس."""
     if len(df) < 2: return False
     c=float(df["close"].iloc[-1]); o=float(df["open"].iloc[-1])
     sup, dem = zones.get("supply"), zones.get("demand")
@@ -442,13 +428,7 @@ def trend_context(ind: dict):
 
 # =================== Votes (Council SCM) ===================
 def council_scm_votes(df, ind, info, zones):
-    """
-    يرجّع:
-      votes_b, reasons_b, votes_s, reasons_s, score_b, score_s, scm_line, trend
-    scm_line: «SCM | trend | boxes | liquidity | displacement | retest | trap | votes»
-    """
     reasons_b=[]; reasons_s=[]; b=s=0; score_b=0.0; score_s=0.0
-    # Trend
     trend = trend_context(ind)
 
     # Boxes (breakout)
@@ -457,7 +437,7 @@ def council_scm_votes(df, ind, info, zones):
     atr=float(ind.get("atr") or 0.0); adx=float(ind.get("adx") or 0.0)
     pdi=float(ind.get("plus_di") or 0.0); mdi=float(ind.get("minus_di") or 0.0)
     body=abs(c-o)
-    def _bps(a,b):
+    def _bps(a,b): 
         try: return abs((a-b)/b)*10000.0
         except Exception: return 0.0
 
@@ -485,7 +465,7 @@ def council_scm_votes(df, ind, info, zones):
     if disp_b: b+=1; score_b+=0.7; reasons_b.append("displacement+"); displacement="up"
     if disp_s: s+=1; score_s+=0.7; reasons_s.append("displacement-"); displacement="down" if displacement=="—" else displacement+"|down"
 
-    # Retest (آخر X شموع)
+    # Retest
     ret_b = retest_happened(df, zones, "buy")
     ret_s = retest_happened(df, zones, "sell")
     retest="—"
@@ -507,9 +487,7 @@ def council_scm_votes(df, ind, info, zones):
     if pdi>mdi and adx>=18: b+=1; score_b+=0.5; reasons_b.append("DI+>DI- & ADX")
     if mdi>pdi and adx>=18: s+=1; score_s+=0.5; reasons_s.append("DI->DI+ & ADX")
 
-    # baseline score
     score_b += b/4.0; score_s += s/4.0
-
     scm_line = f"SCM | {trend} | {boxes} | {liquidity} | {displacement} | {retest} | {trap} | votes(b={b},s={s})"
     return b,reasons_b,s,reasons_s,score_b,score_s,scm_line,trend
 
@@ -555,14 +533,12 @@ def council_exhaustion_votes(df, ind, info, zones, trend):
         if rsi - STATE.get("rsi_trough", rsi) >= EXH_RSI_PULLBACK and STATE.get("rsi_trough", rsi) <= 30:
             votes += 1; reasons.append("RSI retreat from OS")
 
-    # فتيلة عكسية قوية قرب صندوق مقابل
     o=float(df["open"].iloc[-1]); h=float(df["high"].iloc[-1]); l=float(df["low"].iloc[-1]); c=float(df["close"].iloc[-1])
     rng=max(h-l,1e-12); upper=h-max(o,c); lower=min(o,c)-l
     sup, dem = zones.get("supply"), zones.get("demand")
     if side=="long" and sup and (upper/rng)>=EXH_WICK_RATIO: votes += 1; reasons.append("upper wick near supply")
     if side=="short" and dem and (lower/rng)>=EXH_WICK_RATIO: votes += 1; reasons.append("lower wick near demand")
 
-    # RF معاكس بهستريسس + Debounce داخل ترند قوي
     hyst = _near_price_bps(info["price"], info["filter"])
     if side=="long" and info.get("short") and hyst>=EXH_HYST_MIN_BPS:
         if trend=="strong_up":
@@ -573,9 +549,7 @@ def council_exhaustion_votes(df, ind, info, zones, trend):
             if STATE.get("opp_rf_count",0) >= OPP_RF_DEBOUNCE: votes += 1; reasons.append("opp RF debounced")
         else: votes += 1; reasons.append("opp RF")
 
-    # BOS ضد الاتجاه
     if _bos_against_trend(df, side): votes += 1; reasons.append("BOS against trend")
-
     return votes, reasons
 
 # =================== Council ENTRY Arbitration ===================
@@ -587,7 +561,6 @@ def council_entry(df, ind, info, zones):
         candidates.append({"side":"buy","score":score_b,"reason":f"SCM BUY {b} :: {b_r}", "trend":trend})
     if s >= COUNCIL_ENTRY_VOTES_MIN:
         candidates.append({"side":"sell","score":score_s,"reason":f"SCM SELL {s} :: {s_r}", "trend":trend})
-    # RF fallbacks
     if info.get("long"):  candidates.append({"side":"buy","score":1.0,"reason":"RF_LONG", "trend":trend})
     if info.get("short"): candidates.append({"side":"sell","score":1.0,"reason":"RF_SHORT","trend":trend})
     candidates.sort(key=lambda x: x["score"], reverse=True)
@@ -634,33 +607,77 @@ def _read_position():
         logging.error(f"_read_position error: {e}")
     return 0.0, None, None
 
+# --------- حجم آمن + فتح تكيفي (مُصحَّح نهائي) ---------
 def compute_size(balance, price):
-    effective = balance or 0.0
-    capital = effective * RISK_ALLOC * LEVERAGE
-    raw = max(0.0, capital / max(float(price or 0.0), 1e-9))
-    return safe_qty(raw)
+    """
+    حجم آمن قابل للتنفيذ:
+    - Buffer للرسوم/الانزلاق (3%).
+    - يلتزم بقيود اللوت والمينيمم.
+    """
+    equity = float(balance or 0.0)
+    px = max(float(price or 0.0), 1e-9)
+    buffer = 0.97  # 3% أمان
+    notional = equity * RISK_ALLOC * LEVERAGE * buffer
+    raw_qty = notional / px
+    return safe_qty(raw_qty)
 
 def open_market(side, qty, price, strength, reason):
-    if qty<=0: print(colored("❌ skip open (qty<=0)", "red")); return False
-    if MODE_LIVE:
+    """
+    فتح تكيفي:
+    1) كاب بالحجم الأقصى المناسب للرصيد.
+    2) عند خطأ الهامش (-110007 / "not enough"/"insufficient") نقلّص 15% ونُعيد (حتى 6 مرات).
+    3) احترام LOT_MIN/LOT_STEP دائماً.
+    """
+    bal = balance_usdt()
+    px = float(price or 0.0)
+    max_affordable = compute_size(bal, px)
+    q_try = safe_qty(min(qty, max_affordable))
+
+    if q_try <= 0 or (LOT_MIN and q_try < LOT_MIN):
+        print(colored(f"❌ skip open (qty too small) — bal={fmt(bal,2)} px={fmt(px)} q={fmt(q_try,4)}", "red"))
+        return False
+
+    attempts = 0
+    while attempts < 6:
         try:
-            try: ex.set_leverage(LEVERAGE, SYMBOL, params={"side":"BOTH"})
-            except Exception: pass
-            ex.create_order(SYMBOL, "market", side, qty, None, _params_open(side))
+            if MODE_LIVE:
+                try: ex.set_leverage(LEVERAGE, SYMBOL, params={"side": "BOTH"})
+                except Exception: pass
+                ex.create_order(SYMBOL, "market", side, q_try, None, _params_open(side))
+            # success
+            STATE.update({
+                "open": True, "side": "long" if side=="buy" else "short", "entry": price,
+                "qty": q_try, "pnl": 0.0, "bars": 0, "trail": None,
+                "hp_pct": 0.0, "strength": float(strength),
+                "peak_adx": 0.0, "rsi_peak": 50.0, "rsi_trough": 50.0,
+                "peak_price": float(price), "trough_price": float(price),
+                "opp_rf_count": 0
+            })
+            TRADE_TIMES.append(time.time())
+            print(colored(
+                f"🚀 OPEN {('🟩 LONG' if side=='buy' else '🟥 SHORT')} "
+                f"qty={fmt(q_try,4)} @ {fmt(price)} | strength={fmt(strength,2)} | {reason}",
+                "green" if side=='buy' else 'red'
+            ))
+            logging.info(f"OPEN {side} qty={q_try} price={price} strength={strength} reason={reason}")
+            return True
+
         except Exception as e:
-            print(colored(f"❌ open: {e}", "red")); logging.error(f"open_market error: {e}"); return False
-    STATE.update({
-        "open": True, "side": "long" if side=="buy" else "short", "entry": price,
-        "qty": qty, "pnl": 0.0, "bars": 0, "trail": None,
-        "hp_pct": 0.0, "strength": float(strength),
-        "peak_adx": 0.0, "rsi_peak": 50.0, "rsi_trough": 50.0,
-        "peak_price": float(price), "trough_price": float(price),
-        "opp_rf_count": 0
-    })
-    TRADE_TIMES.append(time.time())
-    print(colored(f"🚀 OPEN {('🟩 LONG' if side=='buy' else '🟥 SHORT')} qty={fmt(qty,4)} @ {fmt(price)} | strength={fmt(strength,2)} | {reason}", "green" if side=="buy" else "red"))
-    logging.info(f"OPEN {side} qty={qty} price={price} strength={strength} reason={reason}")
-    return True
+            msg = str(e).lower()
+            attempts += 1
+            insufficient = ("-110007" in msg) or ("not enough" in msg) or ("insufficient" in msg)
+            if insufficient:
+                new_q = safe_qty(q_try * 0.85)
+                print(colored(f"⚠️ open: insufficient margin — retry {attempts}/6 with qty={fmt(new_q,4)} (was {fmt(q_try,4)})", "yellow"))
+                if new_q <= 0 or (LOT_MIN and new_q < LOT_MIN):
+                    print(colored("⛔ qty fell below exchange minimum — abort open", "red"))
+                    break
+                q_try = new_q
+                time.sleep(0.5)
+                continue
+            print(colored(f"❌ open: {e}", "red")); logging.error(f"open_market error: {e}"); break
+    return False
+# --------------------------------------------------------
 
 def _reset_after_close(reason, prev_side=None):
     prev_side = prev_side or STATE.get("side")
@@ -729,19 +746,13 @@ def manage_position(df, ind, info, zones, trend):
     px = info["price"]; entry=STATE["entry"]; side=STATE["side"]
     rr = (px - entry)/entry*100*(1 if side=="long" else -1)
 
-    # Debounce RF المعاكس: عدّاد داخل ترند قوي
     opp = (side=="long" and info.get("short")) or (side=="short" and info.get("long"))
-    if opp:
-        STATE["opp_rf_count"] = STATE.get("opp_rf_count",0)+1
-    else:
-        STATE["opp_rf_count"] = 0
+    STATE["opp_rf_count"] = STATE.get("opp_rf_count",0)+1 if opp else 0
 
-    # خروج SCM نهاية موجة (بعد التأكد)
     votes, rs = council_exhaustion_votes(df, ind, info, zones, trend)
     if votes >= EXH_VOTES_NEEDED:
         close_market_strict("SCM_EXHAUSTION: " + ",".join(rs)); return
 
-    # Opposite RF confirmed (مع Debounce في الترند القوي)
     adx=float(ind.get("adx") or 0.0)
     hyst=_near_price_bps(info["price"], info["filter"])
     if opp and adx>=BREAK_ADX_MIN and hyst>=EXH_HYST_MIN_BPS:
@@ -750,14 +761,12 @@ def manage_position(df, ind, info, zones, trend):
            (trend not in ("strong_up","strong_down")):
             close_market_strict("OPPOSITE_RF_CONFIRMED"); return
 
-    # Wick-harvest: مؤجل في الترند القوي
     if rr >= WICK_TAKE_MIN_PCT and trend not in ("strong_up","strong_down"):
         o=float(df["open"].iloc[-1]); h=float(df["high"].iloc[-1]); l=float(df["low"].iloc[-1]); c=float(df["close"].iloc[-1])
         rng=max(h-l,1e-12); upper=h-max(o,c); lower=min(o,c)-l
         if (side=="long" and (upper/rng)>=WICK_RATIO_MIN) or (side=="short" and (lower/rng)>=WICK_RATIO_MIN):
             close_market_strict("LONG_WICK_TAKE"); return
 
-    # ATR trail — ركوب الترند
     atr=float(ind.get("atr") or 0.0)
     if rr >= TRAIL_ACTIVATE_PCT and atr>0:
         gap = atr * ATR_TRAIL_MULT
@@ -804,10 +813,10 @@ def evaluate_all(df):
     return info, ind, zones, candidates, trend
 
 def choose_and_open(best, bal, px, info):
-    qty = compute_size(bal, px or info["price"])
-    if qty>0 and open_market("buy" if best["side"]=="buy" else "sell", qty, px or info["price"], best["score"], best["reason"]):
-        return True
-    return False
+    pre_qty = compute_size(bal, px or info["price"])
+    return open_market("buy" if best["side"]=="buy" else "sell",
+                       pre_qty, px or info["price"],
+                       best["score"], best["reason"])
 
 def trade_loop():
     global LAST_CLOSE_TS
@@ -907,7 +916,7 @@ def keepalive_loop():
 # =================== BOOT ===================
 if __name__ == "__main__":
     print(colored(f"MODE: {'LIVE' if MODE_LIVE else 'PAPER'}  •  {SYMBOL}  •  {INTERVAL}", "yellow"))
-    print(colored("SCM Council ON | Debounce RF | Exhaustion Exit | Single-entry Arbitration", "yellow"))
+    print(colored("SCM Council ON | Debounce RF | Exhaustion Exit | Adaptive Open + Safe Sizing", "yellow"))
     logging.info("service starting…")
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     signal.signal(signal.SIGINT,  lambda *_: sys.exit(0))
