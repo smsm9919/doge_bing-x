@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 BYBIT — SOL Perp Bot
-RF (closed) + Smart Council SCM (Boxes + Liquidity + Displacement + Retest + Trap + Trend)
+RF (closed candle) + Smart Council SCM (Boxes + Liquidity + Sweeps + Displacement + Retest + Trap + Trend)
 • ENV فقط: BYBIT_API_KEY, BYBIT_API_SECRET, SELF_URL/RENDER_EXTERNAL_URL, PORT
-• دخول واحد مُحكّم (Arbitration: Council > RF). لا تكرار.
+• دخول واحد مُحكّم (Council > RF). لا تكرار.
 • Debounce لإشارات RF المعاكسة داخل الترند.
 • Wick-harvest مؤجل في الترند القوي.
 • خروج صارم عند نهاية موجة الترند بعد تأكيد SCM.
-• Logs مختصرة: «SCM | trend | boxes | liquidity | displacement | retest | trap | votes»
+• Logs سطر واحد يشرح: «SCM | trend | boxes | liquidity | displacement | retest | trap | votes».
 """
 
 import os, time, math, random, signal, sys, traceback, logging
@@ -70,7 +70,9 @@ LIQ_EQ_LOOKBACK    = 30     # البحث عن قمم/قيعان متساوية
 LIQ_EQ_TOL_BPS     = 6.0    # هامش المساواة
 SWEEP_WICK_RATIO   = 0.55   # فتيلة sweep
 DISP_BODY_ATR_MIN  = 0.75   # شمعة دفع (Displacement)
-RETEST_MAX_BARS    = 6      # إعادة اختبار خلال X شموع
+RETEST_MAX_BARS    = 6      # إعادة اختبار خلال X شموع (مُصلَحة الاسم)
+
+# فِخ Trap
 TRAP_CLOSE_BACK_BPS= 8.0    # إغلاق رجوع داخل الصندوق بعد كسره
 
 # ترند قوي / Debounce RF
@@ -201,7 +203,7 @@ def _round_amt(q):
         return max(0.0, float(q))
 
 def safe_qty(q):
-    q=_round_amt(q)
+    q = _round_amt(q)
     if q<=0: print(colored(f"⚠️ qty invalid after normalize → {q}", "yellow"))
     return q
 
@@ -362,7 +364,6 @@ def find_equal_highs_lows(df: pd.DataFrame):
     highs = d["high"].astype(float).values
     lows  = d["low"].astype(float).values
     eh = max(highs); el = min(lows)
-    # تحقق من تقارب عدة قمم/قيعان حول eh/el
     def _cluster(vals, target, tol_bps):
         cnt = sum(1 for v in vals if abs((v-target)/target)*10000.0 <= tol_bps)
         return cnt>=3
@@ -395,18 +396,25 @@ def displacement_bar(df: pd.DataFrame, ind: dict, side: str) -> bool:
     else:            return (c<o) and (body >= DISP_BODY_ATR_MIN*atr)
 
 def retest_happened(history_df: pd.DataFrame, zones: dict, side: str) -> bool:
-    """إعادة اختبار سريعة لصندوق مكسور خلال REiTEST_MAX_BARS."""
-    if len(history_df) < REtest_MAX_BARS+2:  # noqa: N806 (keeping user’s style)
+    """إعادة اختبار سريعة لصندوق مكسور خلال RETEST_MAX_BARS شموع مغلقة."""
+    try:
+        if len(history_df) < RETEST_MAX_BARS + 2:
+            return False
+        d = history_df.iloc[-(RETEST_MAX_BARS+1):-1]
+        sup, dem = zones.get("supply"), zones.get("demand")
+        closes = d["close"].astype(float).values
+
+        if side == "buy" and sup:
+            mid = (sup["top"] + sup["bot"]) / 2.0
+            return any((px >= sup["bot"] and px <= sup["top"]) or (px >= mid) for px in closes)
+
+        if side == "sell" and dem:
+            mid = (dem["top"] + dem["bot"]) / 2.0
+            return any((px <= dem["top"] and px >= dem["bot"]) or (px <= mid) for px in closes)
+
         return False
-    d = history_df.iloc[-(RETEST_MAX_BARS+1):-1]
-    sup, dem = zones.get("supply"), zones.get("demand")
-    closes = d["close"].astype(float).values
-    if side=="buy" and sup:
-        # بعد اختراق سقف العرض، عاد يلمس منطقة البوت/المنتصف وأغلق فوقها
-        return any(px >= sup["bot"] and px <= sup["top"] for px in closes)
-    if side=="sell" and dem:
-        return any(px <= dem["top"] and px >= dem["bot"] for px in closes)
-    return False
+    except Exception:
+        return False
 
 def trap_detect(df: pd.DataFrame, zones: dict, side: str) -> bool:
     """Trap: كسر وهمي وإغلاق رجوع داخل الصندوق بالهستريسس."""
@@ -436,7 +444,7 @@ def trend_context(ind: dict):
 def council_scm_votes(df, ind, info, zones):
     """
     يرجّع:
-      votes_b, reasons_b, votes_s, reasons_s, score_b, score_s, scm_line
+      votes_b, reasons_b, votes_s, reasons_s, score_b, score_s, scm_line, trend
     scm_line: «SCM | trend | boxes | liquidity | displacement | retest | trap | votes»
     """
     reasons_b=[]; reasons_s=[]; b=s=0; score_b=0.0; score_s=0.0
@@ -506,7 +514,7 @@ def council_scm_votes(df, ind, info, zones):
     return b,reasons_b,s,reasons_s,score_b,score_s,scm_line,trend
 
 # =================== Council Exhaustion (خروج) ===================
-def _near_price_bps(a,b): 
+def _near_price_bps(a,b):
     try: return abs((a-b)/b)*10000.0
     except Exception: return 0.0
 
@@ -554,7 +562,7 @@ def council_exhaustion_votes(df, ind, info, zones, trend):
     if side=="long" and sup and (upper/rng)>=EXH_WICK_RATIO: votes += 1; reasons.append("upper wick near supply")
     if side=="short" and dem and (lower/rng)>=EXH_WICK_RATIO: votes += 1; reasons.append("lower wick near demand")
 
-    # RF معاكس بهستريسس + Debounce داخل ترند قوي (نطلب تأكيد أكبر)
+    # RF معاكس بهستريسس + Debounce داخل ترند قوي
     hyst = _near_price_bps(info["price"], info["filter"])
     if side=="long" and info.get("short") and hyst>=EXH_HYST_MIN_BPS:
         if trend=="strong_up":
