@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: dogee-bot-z
+    name: sol-bybit-bot
     env: python
     plan: free
     region: frankfurt
@@ -13,63 +13,71 @@ services:
         value: 3.10.14
       - key: PORT
         value: 5000
+
+      # السوق/الإعدادات
+      - key: SYMBOL
+        value: SOL/USDT:USDT
       - key: INTERVAL
         value: 15m
-      - key: DECISION_EVERY_S
-        value: 30
-      - key: KEEPALIVE_SECONDS
-        value: 60
       - key: LEVERAGE
         value: 10
-      - key: LIVE_TRADING
-        value: "false"
-      - key: STRATEGY
-        value: smart
-      - key: SYMBOL
-        value: DOGE/USDT:USDT
-      - key: USE_TV_BAR
-        value: "false"
-      - key: FORCE_TV_ENTRIES
-        value: "false"
-      - key: RF_PERIOD
-        value: "20"
+      - key: POSITION_MODE
+        value: oneway
+      - key: RISK_ALLOC
+        value: "0.60"
+
+      # Range Filter (LIVE)
       - key: RF_SOURCE
         value: close
+      - key: RF_PERIOD
+        value: "20"
       - key: RF_MULT
         value: "3.5"
-      - key: SPREAD_GUARD_BPS
+      - key: RF_LIVE_ONLY
+        value: "true"
+      - key: RF_HYST_BPS
         value: "6"
+
+      # مؤشرات
       - key: RSI_LEN
         value: "14"
       - key: ADX_LEN
         value: "14"
-      - key: TP1_PCT
+      - key: ATR_LEN
+        value: "14"
+      - key: MAX_SPREAD_BPS
+        value: "8"
+
+      # إدارة الصفقة
+      - key: TP1_PCT_BASE
         value: "0.40"
       - key: TP1_CLOSE_FRAC
         value: "0.50"
-      - key: TRAIL_ACTIVATE_PCT
-        value: "0.60"
-      - key: ATR_LEN
-        value: "14"
-      - key: ATR_MULT_TRAIL
-        value: "1.6"
-      - key: BREAKEVEN_AFTER_PCT
+      - key: BREAKEVEN_AFTER
         value: "0.30"
-      - key: COOLDOWN_AFTER_CLOSE_BARS
-        value: "0"
-      - key: USE_SMART_EXIT
-        value: "true"
-      - key: SCALE_IN_ENABLED
-        value: "true"
-      - key: SCALE_IN_ADX_MIN
-        value: "25"
-      - key: SCALE_IN_SLOPE_MIN
-        value: "0.50"
-      - key: SCALE_IN_MAX_ADDS
-        value: "3"
-      - key: RENDER_EXTERNAL_URL
+      - key: TRAIL_ACTIVATE_PCT
+        value: "1.20"
+      - key: ATR_TRAIL_MULT
+        value: "1.6"
+
+      # حمايات الكمية/الإغلاق
+      - key: FINAL_CHUNK_QTY
+        value: "0.2"
+      - key: RESIDUAL_MIN_QTY
+        value: "0.05"
+
+      # مضاد الفليب-فلوب/الريتم
+      - key: COOLDOWN_SEC
+        value: "90"
+      - key: MAX_TRADES_PER_HOUR
+        value: "6"
+
+      # أسرار Bybit (ضِفها من Secrets)
+      - key: BYBIT_API_KEY
+        sync: false
+      - key: BYBIT_API_SECRET
+        sync: false
+
+      # Keepalive اختياري (اتركه فاضي لو مش محتاج)
+      - key: SELF_URL
         value: ""
-      - key: BINGX_API_KEY
-        sync: false
-      - key: BINGX_API_SECRET
-        sync: false
