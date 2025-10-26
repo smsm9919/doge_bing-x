@@ -8,8 +8,7 @@ BYBIT — SOL Perp Bot (RF-CLOSED + Council • One-Shot Strict Close)
 • Management (after entry only):
     - Trend riding (ADX/DI confirms) with ATR trail as safety-net
     - ONE-SHOT strict close at: Apex rejection OR Long-wick+decent PnL OR Confirmed opposite RF
-• Strict close (reduceOnly) + final-chunk guard
-• After ANY close: wait for the SAME RF signal side on a CLOSED candle before new entries
+• Strict close (reduceOnly) + wait-for-next-same-side after any close
 • Guards: ADX>=17 entry gate, spread guard, cooldown, rate-limit
 • Flask /metrics /health + rotating logs
 """
@@ -57,7 +56,7 @@ ADX_ENTRY_MIN = 17.0
 MAX_SPREAD_BPS = 8.0
 
 # One-shot close triggers
-WICK_TAKE_MIN_PCT = 0.40  # إذا ربح ≥ هذا الحد وظهرت فتيلة طويلة → إغلاق صارم
+WICK_TAKE_MIN_PCT = 0.40  # إذا الربح ≥ هذا الحد وظهرت فتيلة طويلة → إغلاق صارم
 WICK_RATIO_TH     = 0.60  # نسبة الفتيلة من مدى الشمعة لتعتبر "طويلة"
 OPP_RF_VOTES_NEEDED = 2
 OPP_RF_MIN_ADX    = 22.0
@@ -78,10 +77,6 @@ BASE_SLEEP     = 5
 NEAR_CLOSE_S   = 1
 COOLDOWN_SEC   = 90
 MAX_TRADES_PER_HOUR = 6
-
-# Final-chunk guard
-FINAL_CHUNK_QTY  = 0.2
-RESIDUAL_MIN_QTY = 0.05
 
 # Optional keepalive (disabled by default)
 SELF_URL = ""  # set if deployed behind HTTP pinger
@@ -171,15 +166,26 @@ def _sym_match(a: str, b: str) -> bool:
     return A == B or A in B or B in A
 
 def _round_amt(q):
+    """Robust amount rounding: supports precision=0 with fractional LOT_MIN (e.g., 0.1)."""
     if q is None: return 0.0
     try:
         d = Decimal(str(q))
+        # 1) Use exchange step if available
         if LOT_STEP and isinstance(LOT_STEP,(int,float)) and LOT_STEP>0:
             step = Decimal(str(LOT_STEP))
             d = (d/step).to_integral_value(rounding=ROUND_DOWN)*step
-        prec = int(AMT_PREC) if AMT_PREC and AMT_PREC>=0 else 0
+        # 2) Derive precision from LOT_MIN if precision==0 but min<1
+        prec = AMT_PREC
+        if (not prec or prec<=0) and LOT_MIN and LOT_MIN < 1:
+            try:
+                prec = max(1, -Decimal(str(LOT_MIN)).as_tuple().exponent)
+            except Exception:
+                prec = 1
+        prec = max(int(prec or 0), 0)
         d = d.quantize(Decimal(1).scaleb(-prec), rounding=ROUND_DOWN)
-        if LOT_MIN and isinstance(LOT_MIN,(int,float)) and LOT_MIN>0 and d < Decimal(str(LOT_MIN)): return 0.0
+        # 3) Enforce min lot
+        if LOT_MIN and isinstance(LOT_MIN,(int,float)) and LOT_MIN>0 and d < Decimal(str(LOT_MIN)):
+            return 0.0
         return float(d)
     except (InvalidOperation, ValueError, TypeError):
         return max(0.0, float(q))
@@ -544,7 +550,7 @@ def _opp_rf_confirmed(ind: dict, info: dict, side: str) -> bool:
     return False
 
 def apex_confirmed(side: str, df: pd.DataFrame, ind: dict, zones: dict):
-    # رفض واضح من المنطقة المقابلة + ارهاق (فتيلة كبيرة) + ADX ضعيف/RSI حيادي
+    # رفض واضح من المنطقة المقابلة + إرهاق (فتيلة كبيرة) + ADX ضعيف/RSI حيادي
     try:
         o=float(df["open"].iloc[-1]); h=float(df["high"].iloc[-1])
         l=float(df["low"].iloc[-1]);  c=float(df["close"].iloc[-1])
