@@ -1,24 +1,5 @@
 # -*- coding: utf-8 -*-
 """
-BYBIT — SUI Perp Bot (RF Closed + Strong Council Only + SmartExec + X-Protect)
-• ENV فقط: BYBIT_API_KEY, BYBIT_API_SECRET, SELF_URL/RENDER_EXTERNAL_URL, PORT
-• دخول RF على الشمعة المغلقة فقط
-• دخول مجلس الإدارة فقط لو الشروط قوية (votes ≥ 5 + score ≥ COUNCIL_STRONG_SCORE_MIN)
-• تنفيذ ذكي + حماية انزلاق + إغلاق صارم مع معالجة -110017 (reduceOnly)
-• مصالحة حالة البوت مع المنصّة + جني ربح للفتائل/الشموع الكبيرة
-"""
-
-import os, time, math, random, signal, sys, traceback, logging
-from logging.handlers import RotatingFileHandler
-from datetime import datetime
-from collections import deque
-from decimal import Decimal, ROUND_DOWN, InvalidOperation
-
-import pandas as pd
-import ccxt
-from flask import Flask, jsonify
-
-try:
     from termcolor import colored
 except Exception:
     def colored(t,*a,**k): return t
