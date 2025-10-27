@@ -1,29 +1,4 @@
-# -*- coding: utf-8 -*-
-"""
-BYBIT — SUI Perp Bot (Closed RF + SCM Council + Smart Execution + X-Protect)
-• ENV فقط: BYBIT_API_KEY, BYBIT_API_SECRET, SELF_URL/RENDER_EXTERNAL_URL, PORT
-• متابعة المركز من المنصّة (reconcile_state) + حماية الانزلاق (Limit-IOC band + fallback Market)
-• دخول ذكي (Council أولاً ثم RF) + إغلاق صارم عند نهاية الموجة/الانفجار أو شمعة/فتيل ضخم مع ربح
-"""
 
-import os, time, math, random, signal, sys, traceback, logging
-from logging.handlers import RotatingFileHandler
-from datetime import datetime
-from collections import deque
-from decimal import Decimal, ROUND_DOWN, InvalidOperation
-
-import pandas as pd
-import ccxt
-from flask import Flask, jsonify
-
-try:
-    from termcolor import colored
-except Exception:
-    def colored(t,*a,**k): return t
-
-# =================== ENV ===================
-API_KEY  = os.getenv("BYBIT_API_KEY", "")
-API_SEC  = os.getenv("BYBIT_API_SECRET", "")
 SELF_URL = (os.getenv("SELF_URL", "") or os.getenv("RENDER_EXTERNAL_URL", "")).strip()
 PORT     = int(os.getenv("PORT", "5000"))
 
