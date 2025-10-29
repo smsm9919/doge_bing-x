@@ -138,6 +138,13 @@ OBI_DEPTH = 10
 OBI_ABS_MIN = 0.15   # |OBI| ≥ هذا يعتبر اتجاه
 CVD_SMOOTH = 10
 
+# >>>>>>>>>>>>>>> FIX: Missing constants (used by liquidity/sweep/retest) <<<<<<<<<<<<<<
+LIQ_EQ_LOOKBACK   = 20     # bars to scan for equal highs/lows clusters
+LIQ_EQ_TOL_BPS    = 8.0    # tolerance around equal levels (bps)
+SWEEP_WICK_RATIO  = 0.55   # wick portion to qualify as rejection after taking the level
+RETEST_MAX_BARS   = 8      # max bars back to consider a retest
+# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
 # Logging / Diagnostics
 DECISIONS_CSV = Path("decisions_log.csv")
 
@@ -285,11 +292,11 @@ def balance_usdt():
 def orderbook_spread_bps():
     try:
         ob = with_retry(lambda: ex.fetch_order_book(SYMBOL, limit=5))
-        bid = ob["bids"][0][0] if ob["bids"] else None
-        ask = ob["asks"][0][0] if ob["asks"] else None
+        bid = ob["bids"][0][0] if ob.get("bids") else None
+        ask = ob["asks"][0][0] if ob.get("asks") else None
         if not (bid and ask): return None
         mid = (bid+ask)/2.0
-        return ((ask-bid)/mid)*10000.0
+        return ((ask-bid)/mid)*10000.0 if mid else None
     except Exception:
         return None
 
@@ -317,6 +324,7 @@ def _best_bid_ask():
 
 def _price_band(side:str, px:float, max_bps:float):
     if px is None: return None
+    # why: aggressive IOC band to avoid price drift rejections
     if side == "buy":  return px * (1 + max_bps/10000.0)
     else:              return px * (1 - max_bps/10000.0)
 
@@ -630,7 +638,7 @@ class Plan(Enum):
 def council_scm_votes(df, ind, info, zones):
     d = df.iloc[:-1] if len(df) >= 2 else df
     if len(d) < 1:
-        return 0,[],0,[],0.0,0.0,"SCM | warmup", "sideways", False, False
+        return 0,[],0,[],0,0,"SCM | warmup", "sideways", False, False
 
     o = float(d["open"].iloc[-1]); c = float(d["close"].iloc[-1])
     reasons_b=[]; reasons_s=[]; b=s=0; score_b=0.0; score_s=0.0
@@ -677,7 +685,7 @@ def council_scm_votes(df, ind, info, zones):
     if inv=="bull_invalid": s+=1; score_s+=0.5; reasons_s.append("bull_fvg_failed")
     if inv=="bear_invalid": b+=1; score_b+=0.5; reasons_b.append("bear_fvg_failed")
 
-    # Candle system (سحب/جمع/تلاعب/انعكاس)
+    # Candle system
     cs = _candle_signals(df)
     if cs["bull_engulf"] or cs["hammer"] or cs["tweezer_bottom"] or cs["liq_grab_down"]:
         b+=1; score_b+=0.5; reasons_b.append("candle_bullish")
@@ -686,7 +694,7 @@ def council_scm_votes(df, ind, info, zones):
     if cs["accumulation_candle"] or cs["inside_bar"]:
         reasons_b.append("accumulation"); reasons_s.append("accumulation")
 
-    # True Top/Bottom (ثقيلة)
+    # True Top/Bottom
     tb_ok, tb_score, tb_r = detect_true_bottom(df, ind)
     tt_ok, tt_score, tt_r = detect_true_top(df, ind)
     if tb_ok: b+=3; score_b+=min(1.8, tb_score/2.0); reasons_b.append(f"true_bottom {tb_r}")
@@ -838,7 +846,9 @@ def _read_position():
     return 0.0, None, None
 
 def compute_size(balance, price):
-    if not balance or balance <= 0 or not price or price <= 0: return 0.0
+    if not balance or balance <= 0 or not price or price <= 0: 
+        print(colored("⚠️ cannot compute size (missing balance/price)", "yellow"))
+        return 0.0
     equity = float(balance); px = max(float(price), 1e-9); buffer = 0.97
     notional = equity * RISK_ALLOC * LEVERAGE * buffer
     raw_qty = notional / px
