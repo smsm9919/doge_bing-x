@@ -53,7 +53,7 @@ ADX_LEN = 14
 ATR_LEN = 14
 
 # Guards
-ADX_ENTRY_MIN   = 17.0   # طلبك
+ADX_ENTRY_MIN   = 17.0
 MAX_SPREAD_BPS  = 8.0
 SPREAD_HARD_BPS = 15.0
 ENTRY_GUARD_WINDOW_SEC = 6
@@ -105,7 +105,7 @@ VEI_FILTER_BPS    = 12.0
 VEI_ADX_MIN       = 18.0
 VEI_VOL_VOTE      = 1
 
-# Loop pacing (سريع لكن محافظ)
+# Loop pacing
 BASE_SLEEP   = 3
 NEAR_CLOSE_S = 1
 MIN_SIGNAL_AGE_SEC = 1
@@ -119,8 +119,8 @@ CHOP_BB_WIDTH_PCT_MAX  = 1.10
 CHOP_RANGE_BARS        = 24
 CHOP_RANGE_BPS_MAX     = 60.0
 CHOP_MIN_PNL_PCT       = 0.20
-CHOP_STRICT_MODE       = True               # يمنع الدخول داخل الرينج
-CHOP_STRONG_BREAK_BONUS= 2                  # رفع متطلبات الأصوات
+CHOP_STRICT_MODE       = True
+CHOP_STRONG_BREAK_BONUS= 2
 POST_CHOP_WAIT_BARS    = 2
 POST_CHOP_REQUIRE_RF   = True
 MIN_REENTRY_BARS       = 1
@@ -135,15 +135,15 @@ TTB_SCORE_MIN   = 3.2
 
 # Bookmap-lite
 OBI_DEPTH = 10
-OBI_ABS_MIN = 0.15   # |OBI| ≥ هذا يعتبر اتجاه
+OBI_ABS_MIN = 0.15
 CVD_SMOOTH = 10
 
-# >>>>>>>>>>>>>>> FIX: Missing constants (used by liquidity/sweep/retest) <<<<<<<<<<<<<<
-LIQ_EQ_LOOKBACK   = 20     # bars to scan for equal highs/lows clusters
-LIQ_EQ_TOL_BPS    = 8.0    # tolerance around equal levels (bps)
-SWEEP_WICK_RATIO  = 0.55   # wick portion to qualify as rejection after taking the level
-RETEST_MAX_BARS   = 8      # max bars back to consider a retest
-# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+# <<< Missing-constants filled >>>
+LIQ_EQ_LOOKBACK   = 20     # مساواة قمم/قيعان
+LIQ_EQ_TOL_BPS    = 8.0
+SWEEP_WICK_RATIO  = 0.55   # رفض قوي بعد أخذ السيولة
+RETEST_MAX_BARS   = 8
+# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
 # Logging / Diagnostics
 DECISIONS_CSV = Path("decisions_log.csv")
@@ -160,7 +160,7 @@ def setup_file_logging():
     print(colored("🗂️ log rotation ready", "cyan"))
 setup_file_logging()
 
-# =================== Exchange (unchanged) ===================
+# =================== Exchange ===================
 def make_ex():
     return ccxt.bybit({
         "apiKey": API_KEY, "secret": API_SEC,
@@ -324,7 +324,6 @@ def _best_bid_ask():
 
 def _price_band(side:str, px:float, max_bps:float):
     if px is None: return None
-    # why: aggressive IOC band to avoid price drift rejections
     if side == "buy":  return px * (1 + max_bps/10000.0)
     else:              return px * (1 - max_bps/10000.0)
 
@@ -450,9 +449,9 @@ def last_fvg(df: pd.DataFrame):
     rng = range(max(2, len(d)-30), len(d))
     bull=None; bear=None
     for i in rng:
-        if lows[i] > highs[i-2]:  # bullish
+        if lows[i] > highs[i-2]:
             bull={"bar":i, "low":float(highs[i-2]), "high":float(lows[i])}
-        if highs[i] < lows[i-2]:  # bearish
+        if highs[i] < lows[i-2]:
             bear={"bar":i, "low":float(highs[i]), "high":float(lows[i-2])}
     return {"bull":bull, "bear":bear}
 
@@ -532,32 +531,25 @@ def _candle_signals(df: pd.DataFrame) -> Dict[str,bool]:
         "liq_grab_up","liq_grab_down","accumulation_candle"
     ]}
     if len(df)<3: return sig
-    d = df.iloc[:-1]  # آخر شمعة مغلقة
+    d = df.iloc[:-1]
     o1,c1,h1,l1 = map(float,(d["open"].iloc[-1], d["close"].iloc[-1], d["high"].iloc[-1], d["low"].iloc[-1]))
     o0,c0,h0,l0 = map(float,(d["open"].iloc[-2], d["close"].iloc[-2], d["high"].iloc[-2], d["low"].iloc[-2]))
     rng1 = max(h1-l1,1e-12); body1=abs(c1-o1)
     upper1=h1-max(o1,c1); lower1=min(o1,c1)-l1
 
-    # Engulfing
     if (c1>o1) and (o1<=min(o0,c0)) and (c1>=max(o0,c0)): sig["bull_engulf"]=True
     if (c1<o1) and (o1>=max(o0,c0)) and (c1<=min(o0,c0)): sig["bear_engulf"]=True
-    # Hammer / Inverted
     if lower1/rng1>=0.6 and upper1/rng1<=0.2 and c1>o1: sig["hammer"]=True
     if upper1/rng1>=0.6 and lower1/rng1<=0.2 and c1>o1: sig["inv_hammer"]=True
-    # Shooting Star / Hanging Man
     if upper1/rng1>=0.6 and lower1/rng1<=0.2 and c1<o1: sig["shooting_star"]=True
     if lower1/rng1>=0.6 and upper1/rng1<=0.2 and c1<o1: sig["hanging_man"]=True
-    # Inside / Outside
     if (h1<=h0 and l1>=l0): sig["inside_bar"]=True
     if (h1>=h0 and l1<=l0): sig["outside_bar"]=True
-    # Tweezer
     tol = (h0-l0)*0.1
     if abs(h1-h0)<=tol and c1<o1: sig["tweezer_top"]=True
     if abs(l1-l0)<=tol and c1>o1: sig["tweezer_bottom"]=True
-    # Liquidity grab candle (تجاوز ثم إغلاق عكسي قوي)
     if h1>h0 and (h1-c1)>=0.55*rng1 and c1<max(o0,c0): sig["liq_grab_up"]=True
     if l1<l0 and (c1-l1)>=0.55*rng1 and c1>min(o0,c0): sig["liq_grab_down"]=True
-    # Accumulation (جسم صغير + فتيلين)
     if body1<=0.35*rng1 and upper1/rng1>=0.3 and lower1/rng1>=0.3: sig["accumulation_candle"]=True
     return sig
 
@@ -593,7 +585,6 @@ def detect_true_bottom(df: pd.DataFrame, ind: dict) -> Tuple[bool, float, List[s
     if sw["sweep_down"]: score += 0.6; reasons.append("liquidity_sweep_down")
     pdi=float(ind.get("plus_di") or 0.0); mdi=float(ind.get("minus_di") or 0.0)
     if adx>=TTB_ADX_MIN and pdi>mdi: score += 0.8; reasons.append("adx_ok_di+>di-")
-    # شموع مساعدة
     cs = _candle_signals(df)
     if cs["hammer"] or cs["tweezer_bottom"] or cs["liq_grab_down"]:
         score += 0.6; reasons.append("candle_bottom_signal")
@@ -702,9 +693,9 @@ def council_scm_votes(df, ind, info, zones):
 
     # Bookmap-lite
     try:
-        bid, ask, ob = _best_bid_ask()
+        _, _, ob = _best_bid_ask()
         obi = orderbook_imbalance(ob, OBI_DEPTH)
-        cvd = cvd_update(df)
+        _ = cvd_update(df)
         if obi <= -OBI_ABS_MIN: b+=1; score_b+=0.4; reasons_b.append(f"OBI bid {obi:.2f}")
         if obi >=  OBI_ABS_MIN: s+=1; score_s+=0.4; reasons_s.append(f"OBI ask {obi:.2f}")
     except Exception: pass
@@ -769,7 +760,6 @@ def council_entry(df, ind, info, zones):
 def is_chop_zone(df: pd.DataFrame, ind: dict) -> bool:
     adx = float(ind.get("adx") or 0.0)
     if adx > CHOP_ADX_MAX: return False
-    # BB width %
     if len(df) < BB_LEN+2: return False
     d = df.iloc[:-1]
     c = d["close"].astype(float)
@@ -780,7 +770,6 @@ def is_chop_zone(df: pd.DataFrame, ind: dict) -> bool:
     bw = float(upper.iloc[-1] - lower.iloc[-1])
     mid= max(float(m.iloc[-1]), 1e-12)
     bb_pct = (bw/mid)*100.0
-    # ATR% مقابل مِديان
     if len(df) < CHOP_LOOKBACK+5: return False
     highs  = d["high"].astype(float); lows = d["low"].astype(float)
     tr = pd.concat([(highs-lows).abs(), (highs-c.shift(1)).abs(), (lows-c.shift(1)).abs()], axis=1).max(axis=1)
@@ -788,13 +777,12 @@ def is_chop_zone(df: pd.DataFrame, ind: dict) -> bool:
     atr_pct = (atr / c.replace(0,1e-12))*100.0
     cur = float(atr_pct.iloc[-1]); med = float(atr_pct.iloc[-CHOP_LOOKBACK:].median())
     atr_frac = cur / max(med,1e-9)
-    # مدى نطاق
     bars = CHOP_RANGE_BARS if len(d) > CHOP_RANGE_BARS else len(d)-1
     hi = float(d["high"].iloc[-bars:].max()); lo = float(d["low"].iloc[-bars:].min()); mid2=(hi+lo)/2.0
     rng_bps = abs((hi-lo)/max(mid2,1e-9))*10000.0
     return (atr_frac <= CHOP_ATR_PCT_FRACTION) and (bb_pct <= CHOP_BB_WIDTH_PCT_MAX) and (rng_bps <= CHOP_RANGE_BPS_MAX)
 
-# =================== EXECUTION (unchanged) ===================
+# =================== EXECUTION ===================
 def _params_open(side):
     return {"positionSide":"BOTH","reduceOnly":False,"positionIdx":0}
 
@@ -818,7 +806,7 @@ def _read_position():
         poss = with_retry(lambda: ex.fetch_positions(params={"type":"swap"}))
         for p in poss:
             sym = (p.get("symbol") or p.get("info",{}).get("symbol") or "")
-            if not _sym_match(sym, SYMBOL): 
+            if not _sym_match(sym, SYMBOL):
                 continue
             ccxt_side = (p.get("side") or "").strip().lower()
             raw_side  = (p.get("info",{}).get("side") or "").strip().lower()
@@ -846,7 +834,7 @@ def _read_position():
     return 0.0, None, None
 
 def compute_size(balance, price):
-    if not balance or balance <= 0 or not price or price <= 0: 
+    if not balance or balance <= 0 or not price or price <= 0:
         print(colored("⚠️ cannot compute size (missing balance/price)", "yellow"))
         return 0.0
     equity = float(balance); px = max(float(price), 1e-9); buffer = 0.97
@@ -909,7 +897,6 @@ def open_market(side, qty, price, strength, reason):
             })
             TRADE_TIMES.append(time.time())
             _last_entry_attempt_ts = _now()
-            # سطر فتح صفقة واضح
             print(colored(
                 f"🚀 OPEN {('🟩 LONG' if cur_side=='long' else '🟥 SHORT')} | qty={fmt(STATE['qty'],4)} @ {fmt(STATE['entry'])} | "
                 f"plan={STATE.get('plan','?')} | strength={fmt(strength,2)} | reason={reason}",
@@ -1106,7 +1093,7 @@ def council_exhaustion_votes(df, ind, info, zones, trend):
     if side=="short" and info.get("long")  and hyst>=EXH_HYST_MIN_BPS: votes += 1; reasons.append("opp RF")
     if _bos_against_trend(df, side): votes += 1; reasons.append("BOS against trend")
     try:
-        bid, ask, ob = _best_bid_ask()
+        _, _, ob = _best_bid_ask()
         obi = orderbook_imbalance(ob, OBI_DEPTH)
         if side=="long" and obi >= OBI_ABS_MIN: votes += 1; reasons.append("OBI ask pressure")
         if side=="short" and obi <= -OBI_ABS_MIN: votes += 1; reasons.append("OBI bid support")
@@ -1211,7 +1198,7 @@ def _has_reversal_cues(df, zones):
     eqh, eql = find_equal_highs_lows(df)
     sw = detect_sweep(df, eqh, eql)
     d = df.iloc[:-1] if len(df) >= 2 else df
-    if len(d) < 3: 
+    if len(d) < 3:
         return False, {"sweep": sw}
     o = float(d["open"].iloc[-1]); c = float(d["close"].iloc[-1])
     h = float(d["high"].iloc[-1]); l = float(d["low"].iloc[-1])
@@ -1251,17 +1238,14 @@ def choose_best_entry(candidates, ind, plan: Plan, xp_gate: dict):
     if not candidates: return None
     adx = float(ind.get("adx") or 0.0)
 
-    # Chop: امنع الدخول إلا إذا كسر قوي (Council + box break + أصوات أعلى)
     if plan == Plan.CHOP_HARVEST and CHOP_STRICT_MODE:
         strong = [c for c in candidates if c["src"]=="council" and c.get("votes",0)>=COUNCIL_ENTRY_VOTES_MIN+CHOP_STRONG_BREAK_BONUS and adx>=BREAK_ADX_MIN]
         return strong[0] if strong else None
 
-    # Breakout-only: لا RF مستقل
     if plan == Plan.BREAKOUT_ONLY:
         br = [c for c in candidates if c["src"]=="council" and c.get("votes",0)>=COUNCIL_ENTRY_VOTES_MIN and adx>=BREAK_ADX_MIN]
         return br[0] if br else None
 
-    # Trend ride: Council أولاً، ثم RF مع الاتجاه فقط
     if plan == Plan.TREND_RIDE:
         ordered = sorted(candidates, key=lambda x: (- (x["src"]=="council"), -x.get("score",0)))
         for c in ordered:
@@ -1271,14 +1255,12 @@ def choose_best_entry(candidates, ind, plan: Plan, xp_gate: dict):
         rf_ok = [c for c in candidates if c["src"]=="rf" and c["side"]==trend_side and adx>=ADX_ENTRY_MIN]
         return rf_ok[0] if rf_ok else None
 
-    # Reversal snipe: Council ذو إشارات فخ/سويب/شموع؛ ثم RF إن قوي
     if plan == Plan.REVERSAL_SNIPE:
         smart = [c for c in candidates if c["src"]=="council" and c.get("votes",0)>=COUNCIL_ENTRY_VOTES_MIN]
         if smart: return smart[0]
         rf_ok = [c for c in candidates if c["src"]=="rf" and adx>=ADX_ENTRY_MIN]
         return rf_ok[0] if rf_ok else None
 
-    # Sit out
     return None
 
 # =================== Evaluate / Loop ===================
@@ -1288,7 +1270,6 @@ def evaluate_all(df):
     zones = detect_zones(df)
     candidates, trend = council_entry(df, ind, info, zones)
     plan, plan_reasons = decide_plan(df, ind, info, zones)
-    # Trace CSV
     try:
         _trace_csv({
             "utc": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
@@ -1368,7 +1349,6 @@ def trade_loop():
                     reason = f"gate: xprotect against entry ({xp_gate['why']})"
                     best = None
 
-            # تنفيذ الدخول
             if not STATE["open"] and best and reason is None:
                 if _now() - _last_entry_attempt_ts < max(ENTRY_GUARD_WINDOW_SEC, MIN_SIGNAL_AGE_SEC):
                     reason = "entry guard window"
