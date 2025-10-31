@@ -531,7 +531,7 @@ def fvg_invalidation(df: pd.DataFrame, fvg: dict):
 # =================== Bookmap-lite ===================
 def orderbook_imbalance(ob, depth=OBI_DEPTH):
     try:
-        asks = ob["asks"][:depth]; bids = ob["bids"][:depth]
+        asks = ob["asks"][:depth]; bids = ob["bids"[:depth]]
         sum_ask = sum(ask[1] for ask in asks)
         sum_bid = sum(bid[1] for bid in bids)
         tot = max(sum_ask + sum_bid, 1e-9)
@@ -1558,7 +1558,7 @@ def decide_plan(df, ind, info, zones):
     return plan, reasons
 
 # =================== اختيار أفضل دخول محسن ===================
-def choose_best_entry(candidates, ind, plan: Plan, xp_gate: dict):
+def choose_best_entry(candidates, ind, plan: Plan, xp_gate: dict, df: pd.DataFrame):
     if not candidates: return None
     adx = float(ind.get("adx") or 0.0)
     pdi = float(ind.get("plus_di") or 0.0); mdi = float(ind.get("minus_di") or 0.0)
@@ -1708,7 +1708,7 @@ def trade_loop():
             # منع تكرار الإشارات
             current_bar_ts = _last_closed_bar_ts(df)
             if reason is None and candidates:
-                best = choose_best_entry(candidates, ind, plan, xprotect_signal(df, ind, {"price": px or info["price"], **info}))
+                best = choose_best_entry(candidates, ind, plan, xprotect_signal(df, ind, {"price": px or info["price"], **info}), df)
                 if (best and
                     LAST_SIGNAL_USED["side"] == best["side"] and
                     LAST_SIGNAL_USED["bar_ts"] == current_bar_ts and
