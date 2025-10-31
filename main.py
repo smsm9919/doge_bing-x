@@ -100,8 +100,16 @@ EXH_HYST_MIN_BPS  = 8.0
 EXH_BOS_LOOKBACK  = 6
 EXH_VOTES_NEEDED  = 3
 
+# =================== إعدادات مجلس الإدارة المحسنة ===================
+COUNCIL_ENTRY_VOTES_MIN  = 6  # زيادة من 5 إلى 6
+COUNCIL_STRONG_SCORE_MIN = 4.0  # زيادة من 3.5 إلى 4.0
+
+# شروط إضافية للقوة
+MIN_CONFIRMATION_SIGNALS = 4  # عدد الإشارات المؤكدة المطلوبة
+TREND_ALIGNMENT_BONUS = 1.5   # مكافأة محاذاة الترند
+VOLUME_CONFIRMATION_REQUIRED = True  # تأكيد الحجم مطلوب
+
 # مجلس الإدارة
-COUNCIL_ENTRY_VOTES_MIN  = 5
 COUNCIL_STRONG_SCORE_MIN = 3.5
 
 # الانزلاق
@@ -786,114 +794,239 @@ def council_scm_votes(df, ind, info, zones):
     if len(d) < 1:
         return 0,[],0,[],0,0,"SCM | warmup", "sideways", False, False
 
-    o = float(d["open"].iloc[-1]); c = float(d["close"].iloc[-1])
+    o = float(d["open"].iloc[-1]); c = float(d["close"].iloc[-1]); v = float(d["volume"].iloc[-1])
     reasons_b=[]; reasons_s=[]; b=s=0; score_b=0.0; score_s=0.0
     trend = trend_context(ind)
     atr=float(ind.get("atr") or 0.0); adx=float(ind.get("adx") or 0.0)
     pdi=float(ind.get("plus_di") or 0.0); mdi=float(ind.get("minus_di") or 0.0)
     body=abs(c-o)
-
+    
+    # تحليل الحجم - جديد
+    avg_volume = df['volume'].rolling(20).mean().iloc[-1] if len(df) > 20 else v
+    volume_boost = v > avg_volume * 1.2  # حجم أعلى من المتوسط
+    
     sup, dem = zones.get("supply"), zones.get("demand")
+    
+    # متطلبات أساسية مشددة
+    if adx < 16:  # زيادة من ADX_ENTRY_MIN
+        reasons_b.append("adx_too_low"); reasons_s.append("adx_too_low")
+        return (b,reasons_b,s,reasons_s,score_b,score_s,f"SCM | ADX太低 {adx:.1f}",trend, False, False)
 
-    # الكسور الحقيقية
-    if sup and c>sup["top"] and _near_bps(c,sup["top"])>=BREAK_HYST_BPS and body>=BREAK_BODY_ATR_MIN*max(atr,1e-9) and adx>=BREAK_ADX_MIN and (pdi>=mdi+BREAK_DI_MARGIN):
-        b+=2; score_b+=1.6; reasons_b.append("breakout@supply +2")
-    if dem and c<dem["bot"] and _near_bps(c,dem["bot"])>=BREAK_HYST_BPS and body>=BREAK_BODY_ATR_MIN*max(atr,1e-9) and adx>=BREAK_ADX_MIN and (mdi>=pdi+BREAK_DI_MARGIN):
-        s+=2; score_s+=1.6; reasons_s.append("breakout@demand +2")
+    # الكسور الحقيقية - شروط مشددة
+    breakout_strength = 0
+    if sup and c>sup["top"] and _near_bps(c,sup["top"])>=BREAK_HYST_BPS:
+        if body>=BREAK_BODY_ATR_MIN*max(atr,1e-9) and adx>=25 and (pdi>=mdi+8):  # زيادة الهوامش
+            b+=3; score_b+=2.0; reasons_b.append("strong_breakout@supply +3")
+            breakout_strength += 1
+    if dem and c<dem["bot"] and _near_bps(c,dem["bot"])>=BREAK_HYST_BPS:
+        if body>=BREAK_BODY_ATR_MIN*max(atr,1e-9) and adx>=25 and (mdi>=pdi+8):
+            s+=3; score_s+=2.0; reasons_s.append("strong_breakout@demand +3")
+            breakout_strength += 1
 
-    # أخذ السيولة
+    # أخذ السيولة مع تأكيد إضافي
     eqh,eql = find_equal_highs_lows(df)
     sw = detect_sweep(df, eqh, eql)
-    if sw["sweep_down"]: b+=1; score_b+=0.6; reasons_b.append("sweep_down")
-    if sw["sweep_up"]:   s+=1; score_s+=0.6; reasons_s.append("sweep_up")
+    if sw["sweep_down"] and volume_boost: 
+        b+=2; score_b+=1.0; reasons_b.append("sweep_down_volume_confirmed")
+    elif sw["sweep_down"]:
+        b+=1; score_b+=0.5; reasons_b.append("sweep_down")
+        
+    if sw["sweep_up"] and volume_boost:
+        s+=2; score_s+=1.0; reasons_s.append("sweep_up_volume_confirmed")
+    elif sw["sweep_up"]:
+        s+=1; score_s+=0.5; reasons_s.append("sweep_up")
 
-    # الانزياح
-    if _displacement(o, c, atr, "buy"):   b+=1; score_b+=0.7; reasons_b.append("displacement+")
-    if _displacement(o, c, atr, "sell"):  s+=1; score_s+=0.7; reasons_s.append("displacement-")
+    # الانزياح مع تأكيد الحجم
+    if _displacement(o, c, atr, "buy") and volume_boost:   
+        b+=2; score_b+=1.0; reasons_b.append("displacement+_volume")
+    elif _displacement(o, c, atr, "buy"):
+        b+=1; score_b+=0.5; reasons_b.append("displacement+")
+        
+    if _displacement(o, c, atr, "sell") and volume_boost:  
+        s+=2; score_s+=1.0; reasons_s.append("displacement-_volume")
+    elif _displacement(o, c, atr, "sell"):
+        s+=1; score_s+=0.5; reasons_s.append("displacement-")
 
-    # إعادة الاختبار
-    if retest_happened(df, zones, "buy"):  b+=1; score_b+=0.5; reasons_b.append("retest_up")
-    if retest_happened(df, zones, "sell"): s+=1; score_s+=0.5; reasons_s.append("retest_down")
+    # إعادة الاختبار مع محاذاة الترند
+    if retest_happened(df, zones, "buy") and trend in ["up", "strong_up"]:
+        b+=2; score_b+=0.8; reasons_b.append("retest_up_trend_aligned")
+    elif retest_happened(df, zones, "buy"):
+        b+=1; score_b+=0.3; reasons_b.append("retest_up")
+        
+    if retest_happened(df, zones, "sell") and trend in ["down", "strong_down"]:
+        s+=2; score_s+=0.8; reasons_s.append("retest_down_trend_aligned")
+    elif retest_happened(df, zones, "sell"):
+        s+=1; score_s+=0.3; reasons_s.append("retest_down")
 
-    # RF
-    if info.get("long"):  b+=1; score_b+=0.5; reasons_b.append("rf_long")
-    if info.get("short"): s+=1; score_s+=0.5; reasons_s.append("rf_short")
+    # RF مع محاذاة الترند
+    if info.get("long") and trend in ["up", "strong_up"]:
+        b+=2; score_b+=0.8; reasons_b.append("rf_long_trend_aligned")
+    elif info.get("long"):
+        b+=1; score_b+=0.3; reasons_b.append("rf_long")
+        
+    if info.get("short") and trend in ["down", "strong_down"]:
+        s+=2; score_s+=0.8; reasons_s.append("rf_short_trend_aligned")
+    elif info.get("short"):
+        s+=1; score_s+=0.3; reasons_s.append("rf_short")
 
-    # DI/ADX
-    if pdi>mdi and adx>=18: b+=1; score_b+=0.5; reasons_b.append("DI+>DI- & ADX")
-    if mdi>pdi and adx>=18: s+=1; score_s+=0.5; reasons_s.append("DI->DI+ & ADX")
+    # DI/ADX مع شروط مشددة
+    if pdi>mdi+5 and adx>=22:  # زيادة هامش DI
+        b+=2; score_b+=0.8; reasons_b.append("DI+>DI-+5 & ADX≥22")
+    elif pdi>mdi and adx>=18:
+        b+=1; score_b+=0.3; reasons_b.append("DI+>DI- & ADX")
+        
+    if mdi>pdi+5 and adx>=22:
+        s+=2; score_s+=0.8; reasons_s.append("DI->DI++5 & ADX≥22")
+    elif mdi>pdi and adx>=18:
+        s+=1; score_s+=0.3; reasons_s.append("DI->DI+ & ADX")
 
-    # FVG
+    # FVG مع محاذاة الترند
     fvg = last_fvg(df)
-    if fvg["bull"]: b+=1; score_b+=0.5; reasons_b.append("bull_fvg")
-    if fvg["bear"]: s+=1; score_s+=0.5; reasons_s.append("bear_fvg")
-    inv = fvg_invalidation(df, fvg)
-    if inv=="bull_invalid": s+=1; score_s+=0.5; reasons_s.append("bull_fvg_failed")
-    if inv=="bear_invalid": b+=1; score_b+=0.5; reasons_b.append("bear_fvg_failed")
+    if fvg["bull"] and trend in ["up", "strong_up"]:
+        b+=2; score_b+=0.8; reasons_b.append("bull_fvg_trend_aligned")
+    elif fvg["bull"]:
+        b+=1; score_b+=0.3; reasons_b.append("bull_fvg")
+        
+    if fvg["bear"] and trend in ["down", "strong_down"]:
+        s+=2; score_s+=0.8; reasons_s.append("bear_fvg_trend_aligned")
+    elif fvg["bear"]:
+        s+=1; score_s+=0.3; reasons_s.append("bear_fvg")
 
-    # نظام الشموع
+    # نظام الشموع مع تأكيد الحجم
     cs = _candle_signals(df)
-    if cs["bull_engulf"] or cs["hammer"] or cs["tweezer_bottom"] or cs["liq_grab_down"]:
-        b+=1; score_b+=0.5; reasons_b.append("candle_bullish")
-    if cs["bear_engulf"] or cs["shooting_star"] or cs["tweezer_top"] or cs["liq_grab_up"]:
-        s+=1; score_s+=0.5; reasons_s.append("candle_bearish")
-    if cs["accumulation_candle"] or cs["inside_bar"]:
-        reasons_b.append("accumulation"); reasons_s.append("accumulation")
+    bull_candles = cs["bull_engulf"] or cs["hammer"] or cs["tweezer_bottom"] or cs["liq_grab_down"]
+    bear_candles = cs["bear_engulf"] or cs["shooting_star"] or cs["tweezer_top"] or cs["liq_grab_up"]
+    
+    if bull_candles and volume_boost:
+        b+=2; score_b+=0.8; reasons_b.append("candle_bullish_volume")
+    elif bull_candles:
+        b+=1; score_b+=0.3; reasons_b.append("candle_bullish")
+        
+    if bear_candles and volume_boost:
+        s+=2; score_s+=0.8; reasons_s.append("candle_bearish_volume")
+    elif bear_candles:
+        s+=1; score_s+=0.3; reasons_s.append("candle_bearish")
 
-    # القمم والقيعان الحقيقية
+    # القمم والقيعان الحقيقية - شروط مشددة
     tb_ok, tb_score, tb_r = detect_true_bottom(df, ind)
     tt_ok, tt_score, tt_r = detect_true_top(df, ind)
-    if tb_ok: b+=3; score_b+=min(1.8, tb_score/2.0); reasons_b.append(f"true_bottom {tb_r}")
-    if tt_ok: s+=3; score_s+=min(1.8, tt_score/2.0); reasons_s.append(f"true_top {tt_r}")
+    
+    if tb_ok and tb_score >= 4.0 and volume_boost:  # زيادة الحد الأدنى للscore
+        b+=4; score_b+=min(2.5, tb_score/1.5); reasons_b.append(f"strong_true_bottom {tb_r}")
+    elif tb_ok:
+        b+=2; score_b+=min(1.5, tb_score/2.0); reasons_b.append(f"true_bottom {tb_r}")
+        
+    if tt_ok and tt_score >= 4.0 and volume_boost:
+        s+=4; score_s+=min(2.5, tt_score/1.5); reasons_s.append(f"strong_true_top {tt_r}")
+    elif tt_ok:
+        s+=2; score_s+=min(1.5, tt_score/2.0); reasons_s.append(f"true_top {tt_r}")
 
-    # Bookmap-lite
+    # Bookmap-lite مع شروط مشددة
     try:
         _, _, ob = _best_bid_ask()
         obi = orderbook_imbalance(ob, OBI_DEPTH)
         _ = cvd_update(df)
-        if obi <= -OBI_ABS_MIN: b+=1; score_b+=0.4; reasons_b.append(f"OBI bid {obi:.2f}")
-        if obi >=  OBI_ABS_MIN: s+=1; score_s+=0.4; reasons_s.append(f"OBI ask {obi:.2f}")
+        if obi <= -0.25:  # زيادة عتبة OBI
+            b+=2; score_b+=0.6; reasons_b.append(f"strong_OBI_bid {obi:.2f}")
+        elif obi <= -0.15:
+            b+=1; score_b+=0.3; reasons_b.append(f"OBI_bid {obi:.2f}")
+            
+        if obi >= 0.25:
+            s+=2; score_s+=0.6; reasons_s.append(f"strong_OBI_ask {obi:.2f}")
+        elif obi >= 0.15:
+            s+=1; score_s+=0.3; reasons_s.append(f"OBI_ask {obi:.2f}")
     except Exception: pass
 
-    # المؤشرات الجديدة
+    # المؤشرات الجديدة مع شروط مشددة
     macd_hist = float(ind.get("macd_hist") or 0.0)
-    if macd_hist > MACD_TREND_THRESHOLD: 
-        b+=1; score_b+=0.3; reasons_b.append("MACD bullish")
-    elif macd_hist < -MACD_TREND_THRESHOLD:
-        s+=1; score_s+=0.3; reasons_s.append("MACD bearish")
+    if macd_hist > 0.001:  # زيادة عتبة MACD
+        b+=2; score_b+=0.4; reasons_b.append("strong_MACD_bullish")
+    elif macd_hist > 0.0001:
+        b+=1; score_b+=0.2; reasons_b.append("MACD_bullish")
+        
+    if macd_hist < -0.001:
+        s+=2; score_s+=0.4; reasons_s.append("strong_MACD_bearish")
+    elif macd_hist < -0.0001:
+        s+=1; score_s+=0.2; reasons_s.append("MACD_bearish")
     
     vwap_trend = STATE.get("vwap_trend", "neutral")
-    if vwap_trend == "bullish": 
-        b+=1; score_b+=0.3; reasons_b.append("VWAP bullish")
+    if vwap_trend == "bullish" and c > float(ind.get("vwap") or c) * 1.005:  # زيادة عتبة VWAP
+        b+=2; score_b+=0.4; reasons_b.append("strong_VWAP_bullish")
+    elif vwap_trend == "bullish":
+        b+=1; score_b+=0.2; reasons_b.append("VWAP_bullish")
+        
+    if vwap_trend == "bearish" and c < float(ind.get("vwap") or c) * 0.995:
+        s+=2; score_s+=0.4; reasons_s.append("strong_VWAP_bearish")
     elif vwap_trend == "bearish":
-        s+=1; score_s+=0.3; reasons_s.append("VWAP bearish")
+        s+=1; score_s+=0.2; reasons_s.append("VWAP_bearish")
     
     delta_pressure = STATE.get("delta_pressure", 0.0)
-    if delta_pressure > 0: 
-        b+=1; score_b+=0.2; reasons_b.append(f"Delta +{delta_pressure:.1f}")
-    elif delta_pressure < 0:
-        s+=1; score_s+=0.2; reasons_s.append(f"Delta {delta_pressure:.1f}")
+    if delta_pressure > 1.0:  # زيادة عتبة Delta
+        b+=2; score_b+=0.3; reasons_b.append(f"strong_Delta +{delta_pressure:.1f}")
+    elif delta_pressure > 0.5:
+        b+=1; score_b+=0.15; reasons_b.append(f"Delta +{delta_pressure:.1f}")
+        
+    if delta_pressure < -1.0:
+        s+=2; score_s+=0.3; reasons_s.append(f"strong_Delta {delta_pressure:.1f}")
+    elif delta_pressure < -0.5:
+        s+=1; score_s+=0.15; reasons_s.append(f"Delta {delta_pressure:.1f}")
 
-    # تجميع الإشارات - مكافأة القوة
+    # تجميع الإشارات - مكافأة القوة المشددة
     stacked_bonus_b = 0
-    if reasons_b.count("true_bottom") and reasons_b.count("rf_long") and reasons_b.count("candle_bullish"):
-        stacked_bonus_b += 0.5; reasons_b.append("stacked_bullish_signals")
+    strong_bull_signals = [
+        any("strong_true_bottom" in r for r in reasons_b),
+        any("strong_breakout" in r for r in reasons_b),
+        any("strong_OBI" in r for r in reasons_b),
+        volume_boost
+    ]
+    
+    if sum(strong_bull_signals) >= 3:
+        stacked_bonus_b += 1.0; reasons_b.append("elite_bullish_cluster")
+    elif sum(strong_bull_signals) >= 2:
+        stacked_bonus_b += 0.5; reasons_b.append("strong_bullish_cluster")
     
     stacked_bonus_s = 0
-    if reasons_s.count("true_top") and reasons_s.count("rf_short") and reasons_s.count("candle_bearish"):
-        stacked_bonus_s += 0.5; reasons_s.append("stacked_bearish_signals")
+    strong_bear_signals = [
+        any("strong_true_top" in r for r in reasons_s),
+        any("strong_breakout" in r for r in reasons_s),
+        any("strong_OBI" in r for r in reasons_s),
+        volume_boost
+    ]
     
+    if sum(strong_bear_signals) >= 3:
+        stacked_bonus_s += 1.0; reasons_s.append("elite_bearish_cluster")
+    elif sum(strong_bear_signals) >= 2:
+        stacked_bonus_s += 0.5; reasons_s.append("strong_bearish_cluster")
+
+    # مكافأة محاذاة الترند القوية
+    if trend == "strong_up" and b > s:
+        trend_bonus_b = 1.0; reasons_b.append("strong_trend_alignment_bonus")
+        score_b += trend_bonus_b
+    elif trend == "up" and b > s:
+        trend_bonus_b = 0.5; reasons_b.append("trend_alignment_bonus")
+        score_b += trend_bonus_b
+        
+    if trend == "strong_down" and s > b:
+        trend_bonus_s = 1.0; reasons_s.append("strong_trend_alignment_bonus")
+        score_s += trend_bonus_s
+    elif trend == "down" and s > b:
+        trend_bonus_s = 0.5; reasons_s.append("trend_alignment_bonus")
+        score_s += trend_bonus_s
+
     score_b += stacked_bonus_b
     score_s += stacked_bonus_s
 
     # تشديد وقت التذبذب
     if CHOP_STRICT_MODE and is_chop_zone(df, ind):
-        b -= CHOP_STRONG_BREAK_BONUS; s -= CHOP_STRONG_BREAK_BONUS
-        score_b -= 0.5; score_s -= 0.5
-        reasons_b.append("chop_strict"); reasons_s.append("chop_strict")
+        b = max(0, b - 3); s = max(0, s - 3)  # خصم أكبر في التذبذب
+        score_b -= 1.0; score_s -= 1.0
+        reasons_b.append("chop_strict_penalty"); reasons_s.append("chop_strict_penalty")
 
-    score_b += b/4.0; score_s += s/4.0
-    scm_line = f"SCM | {trend} | votes(b={b},s={s}) | MACD:{STATE.get('macd_trend','?')} VWAP:{STATE.get('vwap_trend','?')}"
+    # حساب النقاط النهائية مع أوزان محسنة
+    score_b += b/3.0  # تقليل وزن الأصوات
+    score_s += s/3.0
+    
+    scm_line = f"SCM | {trend} | votes(b={b},s={s}) | vol_boost={volume_boost} | elite_mode"
     return (b,reasons_b,s,reasons_s,score_b,score_s,scm_line,trend, False, False)
 
 def council_entry(df, ind, info, zones):
@@ -1424,32 +1557,85 @@ def decide_plan(df, ind, info, zones):
     STATE["plan"]=plan.value; STATE["plan_reasons"]=reasons
     return plan, reasons
 
+# =================== اختيار أفضل دخول محسن ===================
 def choose_best_entry(candidates, ind, plan: Plan, xp_gate: dict):
     if not candidates: return None
     adx = float(ind.get("adx") or 0.0)
+    pdi = float(ind.get("plus_di") or 0.0); mdi = float(ind.get("minus_di") or 0.0)
+    
+    # تحليل الحجم
+    volume_ok = False
+    if len(df) > 20:
+        current_volume = float(df['volume'].iloc[-1])
+        avg_volume = float(df['volume'].rolling(20).mean().iloc[-1])
+        volume_ok = current_volume > avg_volume * 1.15
+
+    # فلترة أولية: إزالة المرشحين الضعفاء
+    strong_candidates = []
+    for c in candidates:
+        # يجب أن يكون لدى مرشحي Council أداء عالي
+        if c["src"] == "council":
+            if c.get("votes", 0) >= 7 and c.get("score", 0) >= 4.5:  # شروط أعلى
+                strong_candidates.append(c)
+        # مرشحي TTB يجب أن يكونوا أقوى
+        elif c["src"] == "ttb":
+            if c.get("score", 0) >= 4.0:  # زيادة عتبة TTB
+                strong_candidates.append(c)
+        # مرشحي RF بحاجة لمؤشرات إضافية
+        elif c["src"] == "rf":
+            if adx >= 22 and volume_ok:  # شروط مشددة لـ RF
+                strong_candidates.append(c)
+    
+    if not strong_candidates:
+        return None
 
     if plan == Plan.CHOP_HARVEST and CHOP_STRICT_MODE:
-        strong = [c for c in candidates if c["src"]=="council" and c.get("votes",0)>=COUNCIL_ENTRY_VOTES_MIN+CHOP_STRONG_BREAK_BONUS and adx>=BREAK_ADX_MIN]
-        return strong[0] if strong else None
+        # في التذبذب نطلب إشارات قوية جداً
+        elite = [c for c in strong_candidates if 
+                c["src"]=="council" and 
+                c.get("votes",0) >= 8 and 
+                c.get("score",0) >= 5.0 and 
+                adx >= 25 and
+                volume_ok]
+        return elite[0] if elite else None
 
     if plan == Plan.BREAKOUT_ONLY:
-        br = [c for c in candidates if c["src"]=="council" and c.get("votes",0)>=COUNCIL_ENTRY_VOTES_MIN and adx>=BREAK_ADX_MIN]
-        return br[0] if br else None
+        # للكسور نطلب قوة استثنائية
+        elite_breakouts = [c for c in strong_candidates if 
+                          c["src"]=="council" and 
+                          c.get("votes",0) >= 8 and 
+                          adx >= 28 and
+                          abs(pdi - mdi) >= 10 and
+                          volume_ok]
+        return elite_breakouts[0] if elite_breakouts else None
 
     if plan == Plan.TREND_RIDE:
-        ordered = sorted(candidates, key=lambda x: (- (x["src"]=="council"), -x.get("score",0)))
-        for c in ordered:
-            if c["src"]=="council" and c.get("votes",0)>=COUNCIL_ENTRY_VOTES_MIN and c.get("score",0)>=COUNCIL_STRONG_SCORE_MIN and adx>=BREAK_ADX_MIN:
-                return c
-        trend_side = "buy" if (ind.get("plus_di",0) > ind.get("minus_di",0)) else "sell"
-        rf_ok = [c for c in candidates if c["src"]=="rf" and c["side"]==trend_side and adx>=ADX_ENTRY_MIN]
-        return rf_ok[0] if rf_ok else None
+        # ركوب الترند يحتاج تأكيدات متعددة
+        trend_aligned = []
+        for c in strong_candidates:
+            trend_side_ok = False
+            if c["side"] == "buy" and pdi > mdi + 6: trend_side_ok = True
+            if c["side"] == "sell" and mdi > pdi + 6: trend_side_ok = True
+                
+            if (c["src"]=="council" and 
+                c.get("votes",0) >= 7 and 
+                c.get("score",0) >= 4.5 and 
+                adx >= 24 and
+                trend_side_ok and
+                volume_ok):
+                trend_aligned.append(c)
+        
+        if trend_aligned:
+            return max(trend_aligned, key=lambda x: x.get("score", 0))
 
     if plan == Plan.REVERSAL_SNIPE:
-        smart = [c for c in candidates if c["src"]=="council" and c.get("votes",0)>=COUNCIL_ENTRY_VOTES_MIN]
-        if smart: return smart[0]
-        rf_ok = [c for c in candidates if c["src"]=="rf" and adx>=ADX_ENTRY_MIN]
-        return rf_ok[0] if rf_ok else None
+        # الانعكاسات تحتاج إشارات قوية جداً
+        strong_reversals = [c for c in strong_candidates if 
+                           c["src"] in ["council", "ttb"] and 
+                           c.get("score",0) >= 4.5 and
+                           volume_ok]
+        if strong_reversals:
+            return max(strong_reversals, key=lambda x: x.get("score", 0))
 
     return None
 
@@ -1551,27 +1737,47 @@ def trade_loop():
                     reason = "entry guard window"
                 else:
                     adx_now = float(ind.get("adx") or 0.0)
+                    
+                    # شرط إضافي: تحليل الحجم
+                    volume_ok = False
+                    if len(df) > 20:
+                        current_volume = float(df['volume'].iloc[-1])
+                        avg_volume = float(df['volume'].rolling(20).mean().iloc[-1])
+                        volume_ok = current_volume > avg_volume * 1.15
+                    
+                    # شروط الدخول المشددة
+                    entry_conditions_met = (
+                        best["src"] == "council" and 
+                        best.get("votes", 0) >= 7 and 
+                        best.get("score", 0) >= 4.5 and 
+                        adx_now >= 22 and
+                        volume_ok and
+                        abs(float(ind.get("plus_di") or 0) - float(ind.get("minus_di") or 0)) >= 5
+                    )
+                    
+                    if best["src"] == "ttb":
+                        entry_conditions_met = (
+                            best.get("score", 0) >= 4.0 and
+                            adx_now >= 20 and
+                            volume_ok
+                        )
+                        
                     if best["src"] == "rf":
-                        if adx_now < ADX_ENTRY_MIN:
-                            reason = f"ignored RF — ADX<{ADX_ENTRY_MIN}"
-                        else:
-                            qty = compute_size(bal, px or info["price"])
-                            ok = open_market("buy" if best["side"]=="buy" else "sell",
-                                             qty, px or info["price"], best["score"], best["reason"])
-                            _last_entry_attempt_ts = _now()
-                            if not ok: reason="open failed (rf)"
+                        entry_conditions_met = (
+                            adx_now >= 22 and
+                            volume_ok and
+                            abs(float(ind.get("plus_di") or 0) - float(ind.get("minus_di") or 0)) >= 4
+                        )
+                    
+                    if entry_conditions_met:
+                        qty = compute_size(bal, px or info["price"])
+                        ok = open_market("buy" if best["side"]=="buy" else "sell",
+                                        qty, px or info["price"], best["score"], f"ELITE: {best['reason']}")
+                        _last_entry_attempt_ts = _now()
+                        if not ok: 
+                            reason = "open failed (elite conditions)"
                     else:
-                        strong_votes = best.get("votes", 0) >= COUNCIL_ENTRY_VOTES_MIN
-                        strong_score = best.get("score", 0) >= COUNCIL_STRONG_SCORE_MIN
-                        strong_adx   = adx_now >= BREAK_ADX_MIN
-                        if not (strong_votes and strong_score and strong_adx):
-                            reason = "ignored Council — weak confirmation"
-                        else:
-                            qty = compute_size(bal, px or info["price"])
-                            ok = open_market("buy" if best["side"]=="buy" else "sell",
-                                             qty, px or info["price"], best["score"], "Council Strong Consensus")
-                            _last_entry_attempt_ts = _now()
-                            if not ok: reason="open failed (council)"
+                        reason = f"elite conditions not met: votes={best.get('votes')} score={best.get('score'):.1f} adx={adx_now:.1f} vol_ok={volume_ok}"
 
             pretty_snapshot(bal, {"price": px or info["price"], **info}, ind, spread_bps, zones, reason, df)
 
@@ -1637,5 +1843,5 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT,  lambda *_: sys.exit(0))
     import threading as _t
     _t.Thread(target=trade_loop, daemon=True).start()
-    _t.Thread(target=keepalive_loop, daemon=True).start()
+    _t.Thread(target=keepalive_loop, daemon=True). start()
     app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
