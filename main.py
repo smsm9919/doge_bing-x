@@ -2270,9 +2270,41 @@ def health():
 def keepalive_loop():
     url=(SELF_URL or "").strip().rstrip("/")
     if not url:
+        def keepalive_loop():
+    url = (SELF_URL or "").strip().rstrip("/")
+    if not url:
         print(colored("⛔ keepalive disabled (SELF_URL not set)", "yellow"))
         return
     import requests
-    sess=requests.Session(); sess.headers.update({"User-Agent":"bybit-sui-keepalive"})
+    sess = requests.Session()
+    sess.headers.update({"User-Agent": "bybit-sui-keepalive"})
     print(colored(f"KEEPALIVE every 50s → {url}", "cyan"))
-    while
+    while True:
+        try:
+            # نضرب /health الأول لأنه خفيف، ولو فشل نجرب الجذر
+            r = sess.get(f"{url}/health", timeout=10)
+            if r.status_code != 200:
+                sess.get(url, timeout=10)
+        except Exception as e:
+            print(colored(f"keepalive warn: {e}", "yellow"))
+        time.sleep(50)
+
+
+def start_background_threads():
+    # خيط التداول
+    t1 = threading.Thread(target=enhanced_trade_loop, name="trade_loop", daemon=True)
+    t1.start()
+    # خيط الإبقاء على التشغيل
+    t2 = threading.Thread(target=keepalive_loop, name="keepalive", daemon=True)
+    t2.start()
+    return t1, t2
+
+
+if __name__ == "__main__":
+    # تشغيل الخيوط الخلفية
+    start_background_threads()
+    # تشغيل خادم الويب لـ Render/Health/Metrics
+    try:
+        app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
+    except Exception as e:
+        print(colored(f"Flask run error: {e}", "red"))
