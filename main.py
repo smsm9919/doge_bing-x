@@ -2238,50 +2238,58 @@ def enhanced_pretty_snapshot(bal, info, ind, spread_bps, zones, reason=None, df=
     print(colored("═" * 120, "cyan"))
 
 # =================== API والحفاظ على التشغيل ===================
+from flask import Flask, jsonify
+import threading, time, requests
+from datetime import datetime
+
 app = Flask(__name__)
+
 @app.route("/")
 def home():
-    mode='LIVE' if MODE_LIVE else 'PAPER'
-    return f"✅ BYBIT SUI BOT PRO — {SYMBOL} {INTERVAL} — {mode} — Council ELITE PRO PLUS (المتداول المحترف المتكامل)"
+    mode = 'LIVE' if MODE_LIVE else 'PAPER'
+    return f"✅ BOT RUNNING — {SYMBOL} {INTERVAL} — {mode} — Council ELITE"
 
 @app.route("/metrics")
 def metrics():
     return jsonify({
-        "symbol": SYMBOL, "interval": INTERVAL, "mode": "live" if MODE_LIVE else "paper",
-        "leverage": LEVERAGE, "risk_alloc": RISK_ALLOC, "price": price_now(),
-        "state": STATE, "compound_pnl": compound_pnl,
-        "guards": {"max_spread_bps": MAX_SPREAD_BPS, "post_chop_block": POST_CHOP_BLOCK_ACTIVE},
-        "last_signal": LAST_SIGNAL_USED
+        "symbol": SYMBOL,
+        "interval": INTERVAL,
+        "mode": "live" if MODE_LIVE else "paper",
+        "leverage": LEVERAGE,
+        "risk_alloc": RISK_ALLOC,
+        "price": price_now(),
+        "state": STATE,
+        "compound_pnl": compound_pnl,
+        "guards": {"max_spread_bps": MAX_SPREAD_BPS},
     })
 
 @app.route("/health")
 def health():
     return jsonify({
-        "ok": True, "mode": "live" if MODE_LIVE else "paper",
-        "open": STATE["open"], "side": STATE["side"], "qty": STATE["qty"],
-        "compound_pnl": compound_pnl, "timestamp": datetime.utcnow().isoformat(),
-        "tp_done": STATE.get("hp_pct",0.0), "opp_votes": STATE.get("opp_rf_count",0),
-        "chop": STATE.get("chop_flag", False), "post_chop_block": POST_CHOP_BLOCK_ACTIVE,
-        "plan": STATE.get("plan"), "votes_b": STATE.get("votes_b",0), "votes_s": STATE.get("votes_s",0),
-        "macd_trend": STATE.get("macd_trend"), "vwap_trend": STATE.get("vwap_trend"),
-        "entry_strength": STATE.get("entry_strength", 0)
+        "ok": True,
+        "mode": "live" if MODE_LIVE else "paper",
+        "open": STATE["open"],
+        "side": STATE["side"],
+        "qty": STATE["qty"],
+        "compound_pnl": compound_pnl,
+        "timestamp": datetime.utcnow().isoformat()
     }), 200
 
+def _base_url() -> str:
+    """إرجاع رابط الخدمة الذاتي بدون الشرطة الأخيرة."""
+    return (SELF_URL or os.getenv("RENDER_EXTERNAL_URL", "") or "").strip().rstrip("/")
+
 def keepalive_loop():
-    url=(SELF_URL or "").strip().rstrip("/")
+    """نبضات حياة لـ Render: تضرب /health دورياً."""
+    url = _base_url()
     if not url:
-        def keepalive_loop():
-    url = (SELF_URL or "").strip().rstrip("/")
-    if not url:
-        print(colored("⛔ keepalive disabled (SELF_URL not set)", "yellow"))
+        print(colored("⛔ keepalive disabled (SELF_URL/RENDER_EXTERNAL_URL not set)", "yellow"))
         return
-    import requests
     sess = requests.Session()
-    sess.headers.update({"User-Agent": "bybit-sui-keepalive"})
+    sess.headers.update({"User-Agent": "keepalive"})
     print(colored(f"KEEPALIVE every 50s → {url}", "cyan"))
     while True:
         try:
-            # نضرب /health الأول لأنه خفيف، ولو فشل نجرب الجذر
             r = sess.get(f"{url}/health", timeout=10)
             if r.status_code != 200:
                 sess.get(url, timeout=10)
@@ -2289,22 +2297,16 @@ def keepalive_loop():
             print(colored(f"keepalive warn: {e}", "yellow"))
         time.sleep(50)
 
-
 def start_background_threads():
-    # خيط التداول
+    """تشغيل لوب التداول + كيب ألايف في خيوط منفصلة."""
     t1 = threading.Thread(target=enhanced_trade_loop, name="trade_loop", daemon=True)
     t1.start()
-    # خيط الإبقاء على التشغيل
     t2 = threading.Thread(target=keepalive_loop, name="keepalive", daemon=True)
     t2.start()
     return t1, t2
 
-
 if __name__ == "__main__":
-    # تشغيل الخيوط الخلفية
+    # شغّل الخيوط الخلفية
     start_background_threads()
-    # تشغيل خادم الويب لـ Render/Health/Metrics
-    try:
-        app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
-    except Exception as e:
-        print(colored(f"Flask run error: {e}", "red"))
+    # شغّل Flask بدون إعادة تحميل
+    app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
